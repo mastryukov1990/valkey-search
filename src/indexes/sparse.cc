@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <bit>
 #include <limits>
+#include <optional>
 #include <queue>
 
 #include "src/attribute_data.h"
@@ -28,6 +29,26 @@ absl::StatusOr<float> Distance(double dot) {
     return absl::InvalidArgumentError("Sparse dot product exceeds FLOAT32");
   }
   return -static_cast<float>(dot);
+}
+
+// Both inputs are ordered by dimension; preserve the unfiltered summation
+// order.
+std::optional<double> Dot(const std::vector<Sparse::Entry> &record,
+                          const std::vector<Sparse::Entry> &query) {
+  size_t i = 0, j = 0;
+  double sum = 0;
+  bool overlap = false;
+  while (i < record.size() && j < query.size()) {
+    if (record[i].dimension < query[j].dimension) {
+      ++i;
+    } else if (record[i].dimension > query[j].dimension) {
+      ++j;
+    } else {
+      sum += double(record[i++].weight) * double(query[j++].weight);
+      overlap = true;
+    }
+  }
+  return overlap ? std::optional<double>(sum) : std::nullopt;
 }
 }  // namespace
 
@@ -150,21 +171,34 @@ absl::StatusOr<bool> Sparse::RemoveRecord(const InternedStringPtr &key,
 
 absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
     absl::string_view query, size_t count, cancel::Token &cancellation,
-    absl::AnyInvocable<bool(const InternedStringPtr &)> filter) const
+    absl::AnyInvocable<bool(const InternedStringPtr &)> filter,
+    const std::vector<InternedStringPtr> *candidates) const
     ABSL_NO_THREAD_SAFETY_ANALYSIS {
   VMSDK_ASSIGN_OR_RETURN(auto entries, Decode(query));
   InternedStringHashMap<double> scores;
   size_t visited = 0;
-  for (const auto &entry : entries) {
-    auto posting = postings_.find(entry.dimension);
-    if (posting == postings_.end()) {
-      continue;
-    }
-    for (const auto &[key, weight] : posting->second) {
+  if (candidates) {
+    for (const auto &key : *candidates) {
       if ((visited++ & 255) == 0 && cancellation->IsCancelled()) {
         return absl::DeadlineExceededError("Sparse search cancelled");
       }
-      scores[key] += double(weight) * double(entry.weight);
+      auto record = records_.find(key);
+      if (record == records_.end()) continue;
+      auto score = Dot(record->second, entries);
+      if (score) scores.emplace(key, *score);
+    }
+  } else {
+    for (const auto &entry : entries) {
+      auto posting = postings_.find(entry.dimension);
+      if (posting == postings_.end()) {
+        continue;
+      }
+      for (const auto &[key, weight] : posting->second) {
+        if ((visited++ & 255) == 0 && cancellation->IsCancelled()) {
+          return absl::DeadlineExceededError("Sparse search cancelled");
+        }
+        scores[key] += double(weight) * double(entry.weight);
+      }
     }
   }
   struct Hit {

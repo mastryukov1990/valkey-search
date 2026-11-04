@@ -105,5 +105,37 @@ TEST_F(SparseIndexTest, RescoringAndOverflow) {
   ASSERT_TRUE(Add("a", huge).ok());
   EXPECT_FALSE(Search(huge).ok());
 }
+
+TEST_F(SparseIndexTest, RemovalRepairReusedIdsAndZeroScoreOverlap) {
+  // Multiple shared postings exercise both swap removal and ID reuse.
+  ASSERT_TRUE(Add("z", Encode({{1, 3}, {2, -3}, {4, 1}})).ok());
+  ASSERT_TRUE(Add("b", Encode({{1, 2}, {2, -2}, {4, 1}})).ok());
+  ASSERT_TRUE(Add("c", Encode({{1, 5}, {2, -5}, {4, 1}})).ok());
+  auto b = StringInternStore::Intern("b");
+  ASSERT_TRUE(index.RemoveRecord(b, DeletionType::kRecord).ok());
+  ASSERT_TRUE(Add("a", Encode({{1, 4}, {2, -4}})).ok());
+  auto c = StringInternStore::Intern("c");
+  ASSERT_TRUE(index
+                  .ModifyRecord(c, AttributeData(vmsdk::MakeUniqueValkeyString(
+                                       Encode({{1, 7}, {2, -7}, {5, 2}}))))
+                  .ok());
+  ASSERT_TRUE(
+      index.RemoveRecord(StringInternStore::Intern("z"), DeletionType::kRecord)
+          .ok());
+  ASSERT_TRUE(
+      index.ModifyRecord(c, AttributeData(vmsdk::MakeUniqueValkeyString("bad")))
+          .ok());
+  ASSERT_TRUE(Add("b", Encode({{1, 8}, {2, -8}})).ok());
+  auto result = Search(Encode({{1, 1}, {2, 1}}));
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result->size(), 2);
+  EXPECT_EQ((*result)[0].external_id->Str(), "a");
+  EXPECT_EQ((*result)[1].external_id->Str(), "b");
+  EXPECT_EQ((*result)[0].distance, 0);
+  EXPECT_EQ((*result)[1].distance, 0);
+  EXPECT_TRUE(Search(Encode({{4, 1}}))->empty());
+  EXPECT_TRUE(Search(Encode({{5, 1}}))->empty());
+  EXPECT_EQ(index.GetTrackedKeyCount(), 2);
+}
 }  // namespace
 }  // namespace valkey_search::indexes

@@ -1,5 +1,7 @@
 # Experimental managed sparse vectors
 
+This branch tests `prefilter`; see [ablation scope](sparse_ablation.md).
+
 This fork explores the managed-index alternative to #1568 / #1587 and the
 dense+sparse RRF use case discussed in #1601. It is a prototype, not a release
 or a supported migration path for existing deployments.
@@ -26,8 +28,10 @@ old vector, HDEL removes the field, DEL/expiry removes its postings. Invalid
 values follow the existing invalid-field policy. Schema metadata is persisted;
 postings are rebuilt from the HASH values during RDB loading, like TAG/NUMERIC.
 
-Search accumulates dot products over the union of query posting lists, applies
-filters and selects top-K with a bounded heap. It does not scan vectors with no
+Filtered searches enumerate matching keys first and score their forward
+vectors. Unfiltered searches accumulate over the union of query posting
+lists. Both select top-K with a bounded heap. The unconditional filtered path
+is an experiment: it severely regresses on broad filters. It does not scan vectors with no
 overlap. Accumulation uses double precision in increasing dimension order;
 the existing query pipeline represents the final distance as FLOAT32. Distance
 is **negative dot product**, sorted ascending with key-ascending ties. Overflow

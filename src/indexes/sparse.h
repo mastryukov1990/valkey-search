@@ -65,7 +65,8 @@ class Sparse : public IndexBase {
   // breaking ties by key ascending. Filter runs before top-K truncation.
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, size_t count, cancel::Token &cancellation,
-      absl::AnyInvocable<bool(const InternedStringPtr &)> filter) const;
+      absl::AnyInvocable<bool(const InternedStringPtr &)> filter,
+      const std::vector<InternedStringPtr> *candidates = nullptr) const;
 
  private:
   void ErasePostings(const InternedStringPtr &key,
