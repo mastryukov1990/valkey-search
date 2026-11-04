@@ -1,5 +1,7 @@
 # Experimental managed sparse vectors
 
+This branch tests `numeric`; see [ablation scope](sparse_ablation.md).
+
 This fork explores the managed-index alternative to #1568 / #1587 and the
 dense+sparse RRF use case discussed in #1601. It is a prototype, not a release
 or a supported migration path for existing deployments.
@@ -37,9 +39,10 @@ contract; it is not WAND, ANN or a quantized/pruned search algorithm.
 Queries use the existing reader thread pool and cancellation token. Index
 mutations and queries share the schema's reader/writer phase synchronization;
 the sparse index owns its data instead of borrowing Valkey STRING buffers.
-The initial implementation uses hash-map postings plus forward vectors to
-support replacements. It trades memory for a simple mutable index. It has no
-compressed posting blocks or filter-selectivity planner yet.
+This ablation uses recycled numeric document IDs, contiguous posting arrays
+and forward vectors with deletion back-references. Query-local score arrays
+avoid per-candidate string-key hashing. It has no compressed blocks or
+selectivity-aware sparse plan chooser yet.
 
 ## Dense + sparse RRF
 
