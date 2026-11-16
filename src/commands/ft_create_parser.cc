@@ -611,6 +611,8 @@ absl::Status ValidateAttributeAlias(absl::string_view alias) {
   return absl::OkStatus();
 }
 
+// Parses one schema field and its options, rejecting combinations unsupported
+// by its type (including JSON or SORTABLE sparse fields).
 absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
     vmsdk::ArgsIterator &itr, absl::string_view attribute_identifier,
     data_model::IndexSchema &index_schema_proto,
@@ -627,6 +629,14 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   VMSDK_ASSIGN_OR_RETURN(auto index_type, ParseIndexerType(itr));
   auto index_proto = std::make_unique<data_model::Index>();
   switch (index_type) {
+    case indexes::IndexerType::kSparse:
+      if (index_schema_proto.attribute_data_type() !=
+          data_model::ATTRIBUTE_DATA_TYPE_HASH) {
+        return absl::InvalidArgumentError(
+            "SPARSE currently supports ON HASH only");
+      }
+      index_proto->mutable_sparse_index();
+      break;
     case indexes::IndexerType::kVector:
       VMSDK_RETURN_IF_ERROR(ParseVector(itr, *index_proto));
       break;
@@ -647,6 +657,9 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
 
   // UNF is only recognized directly after SORTABLE, as in Redis
   if (vmsdk::IsParamNext(kSortableParam, itr)) {
+    if (index_type == indexes::IndexerType::kSparse) {
+      return absl::InvalidArgumentError("SPARSE does not support SORTABLE");
+    }
     attribute_proto->set_sortable(true);
     if (vmsdk::IsParamNext(kUnfParam, itr)) {
       attribute_proto->set_unf(true);

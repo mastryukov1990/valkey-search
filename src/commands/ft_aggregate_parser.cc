@@ -399,6 +399,8 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
   return parser;
 }
 
+// Resolves a pipeline alias or schema field and preserves its expression type.
+// Sparse values, like dense vector blobs, can be loaded as raw attributes.
 absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
 AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   DBG << "MakeReference : " << name << " Create:" << create << "\n";
@@ -418,6 +420,7 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
       case indexes::IndexerType::kVector:
       case indexes::IndexerType::kFlat:
       case indexes::IndexerType::kHNSW:
+      case indexes::IndexerType::kSparse:
         break;
       default:
         return absl::InvalidArgumentError(

@@ -54,6 +54,17 @@ namespace valkey_search::query::fanout {
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
 struct NeighborComparator {
+  // Selects the shard-local tie order so coordinator top-K agrees with it.
+  explicit NeighborComparator(const SearchParameters &params) {
+    if (params.index_schema && params.IsVectorQuery()) {
+      auto index = params.index_schema->GetIndex(params.attribute_alias);
+      sparse = index.ok() &&
+               (*index)->GetIndexerType() == indexes::IndexerType::kSparse;
+    }
+  }
+
+  bool sparse = false;
+  // Keeps the worst retained hit at the root of the merge heap.
   bool operator()(const indexes::Neighbor &a,
                   const indexes::Neighbor &b) const {
     // Max heap on distance, to pop off the furthest vector during KNN
@@ -67,6 +78,9 @@ struct NeighborComparator {
     // Secondary sort: by key for consistent ordering when distances are equal.
     // The full string compare is required because for external keys there is no
     // guarantee of the stability of the InternedStringPtr across invocations.
+    // Sparse shard-local top-K orders equal distances by ascending key. Keep
+    // the largest tied key at the heap root so it is evicted first.
+    if (sparse) return a.external_id->Str() < b.external_id->Str();
     return a.external_id->Str() > b.external_id->Str();
   }
 };
@@ -88,6 +102,7 @@ struct SearchPartitionResultsTracker {
   // Since there can only be a single LocalResponder, this doesn't need a lock.
   //
   std::unique_ptr<SearchParameters> local_responder_;
+  const NeighborComparator order;
   std::priority_queue<indexes::Neighbor, std::vector<indexes::Neighbor>,
                       NeighborComparator>
       results ABSL_GUARDED_BY(mutex);
@@ -110,7 +125,9 @@ struct SearchPartitionResultsTracker {
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 std::unique_ptr<SearchParameters> parameters)
-      : outstanding_requests(outstanding_requests),
+      : order(*parameters),
+        results(order),
+        outstanding_requests(outstanding_requests),
         parameters(std::move(parameters)) {}
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
@@ -187,6 +204,7 @@ struct SearchPartitionResultsTracker {
     accumulated_total_count.fetch_add(count, std::memory_order_relaxed);
   }
 
+  // Merges one hit, using sparse key ties when the global heap is full.
   void AddResult(indexes::Neighbor &neighbor)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
     // For non-vector queries, we can add the result directly.
@@ -196,7 +214,8 @@ struct SearchPartitionResultsTracker {
     }
     if (results.size() < parameters->k) {
       results.emplace(std::move(neighbor));
-    } else if (neighbor.distance < results.top().distance) {
+    } else if (order.sparse ? order(neighbor, results.top())
+                            : neighbor.distance < results.top().distance) {
       results.emplace(std::move(neighbor));
       results.pop();
     }
